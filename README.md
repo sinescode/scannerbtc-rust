@@ -64,9 +64,10 @@ btc-scanner check addresses.tsv addresses.bloom missing.tsv
 ## Development
 
 ```bash
-cargo test                    # 74 tests
+cargo test                    # 112 tests
 cargo clippy --all-targets    # zero warnings
 cargo fmt                     # format
+cargo bench                   # run benchmarks
 ```
 
 ## Project Structure
@@ -75,6 +76,7 @@ cargo fmt                     # format
 src/
 ├── main.rs           # CLI + all 3 subcommands
 ├── lib.rs            # Module declarations
+├── config.rs         # Configuration management
 ├── siphash.rs        # SipHash-1-3 (Bloom filter hash)
 ├── bloom.rs          # Bloom filter v3 + TSV index cache
 ├── crypto.rs         # SHA-256, RIPEMD-160, secp256k1
@@ -83,4 +85,16 @@ src/
 ├── bip32.rs          # HD key derivation
 ├── bip39.rs          # Mnemonic generation
 └── tsv.rs            # Memory-mapped TSV + .idx cache
+benches/
+└── crypto_bench.rs   # Criterion benchmarks
+tests/
+└── differential.rs   # Official BIP-32/BIP-39 test vectors
 ```
+
+## Security
+
+See [SECURITY.md](SECURITY.md) for threat model and security policy.
+
+## License
+
+MIT

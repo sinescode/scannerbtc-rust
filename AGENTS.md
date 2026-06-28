@@ -8,9 +8,10 @@ Single Rust binary `btc-scanner` with 3 subcommands: `build`, `scan`, `check`.
 
 ```bash
 cargo build --release         # single binary: target/release/btc-scanner
-cargo test                    # 74 tests, all pass
+cargo test                    # 112 tests, all pass
 cargo clippy --all-targets    # zero warnings
 cargo fmt                     # format
+cargo bench                   # run benchmarks
 ```
 
 ## Structure
@@ -18,18 +19,29 @@ cargo fmt                     # format
 | File | Purpose |
 |------|---------|
 | `src/main.rs` | CLI (clap derive) + all 3 subcommand implementations |
+| `src/config.rs` | Configuration management with validation |
 | `src/siphash.rs` | SipHash-1-3 double-output — bit-compatible with C++ version |
 | `src/bloom.rs` | Bloom filter (v3 format), TSV index cache, line offsets |
 | `src/crypto.rs` | SHA-256, RIPEMD-160, HMAC-SHA512, PBKDF2, secp256k1 |
-| `src/encoding.rs` | Base58Check, Bech32/Bech32m |
+| `src/encoding.rs` | Base58Check encode/decode, Bech32/Bech32m |
 | `src/bitcoin.rs` | Address generation: P2PKH, P2SH-P2WPKH, P2WPKH, P2WSH, P2TR |
-| `src/bip32.rs` | BIP-32 HD key derivation |
-| `src/bip39.rs` | BIP-39 mnemonic generation |
+| `src/bip32.rs` | BIP-32 HD key derivation (Result-based error handling) |
+| `src/bip39.rs` | BIP-39 mnemonic generation with NFKD normalization |
 | `src/tsv.rs` | Memory-mapped TSV with parallel index, `.idx` cache |
+| `tests/differential.rs` | Official BIP-32/BIP-39 test vectors |
+| `benches/crypto_bench.rs` | Criterion benchmarks for crypto operations |
 
 ## Dependencies
 
-sha2 0.11, ripemd 0.2, hmac 0.13, secp256k1 0.31, rand 0.9, pbkdf2 0.13, clap 4.
+sha2 0.11, ripemd 0.2, hmac 0.13, secp256k1 0.31, rand 0.9, pbkdf2 0.13, clap 4, zeroize 1, unicode-normalization 0.1, criterion 0.5.
+
+## Key Design Decisions
+
+- **Result-based errors**: `DerivationError`, `BloomError`, `MnemonicError`, `Base58Error`, `ConfigError`
+- **Static secp256k1 context**: `LazyLock<Secp256k1<All>>` reused across all calls
+- **NFKD normalization**: BIP-39 mnemonic and passphrase normalized before PBKDF2
+- **Zeroize on drop**: `XKey` zeros key material when dropped
+- **Debug assertions**: Bloom filter indexing bounds checked in debug builds
 
 ## Compatibility
 
