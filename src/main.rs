@@ -213,6 +213,9 @@ fn cmd_build(input: &str, output: &str, expected: u64, fpp: f64) {
     println!();
 
     println!("{}  ⟳{}  Mapping {}...", ANSI_YELLOW, ANSI_RESET, input);
+    // SAFETY: Mmap::map maps a file into virtual memory. The file was opened
+    // successfully (checked by expect), and Mmap::map checks the file is valid.
+    // No data is mutated through this mapping — it's read-only.
     let mmap = Arc::new(unsafe {
         let file = File::open(input).expect("Cannot open TSV");
         memmap2::Mmap::map(&file).expect("Cannot mmap TSV")

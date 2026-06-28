@@ -273,4 +273,28 @@ mod tests {
         let kd = fill_key_data(&privkey).unwrap();
         assert_eq!(kd.p2pkh, "15mKKb2eos1hWa6tisdPwwDC1a5J1y9nma");
     }
+
+    // Known private key → address vectors
+    #[test]
+    fn test_known_private_key_vector() {
+        let privkey =
+            hex_literal::hex!("18e14a7b6a307f426a94f8114701e7c8e774e7f9a47e2c20354248a276fc3653");
+        let kd = fill_key_data(&privkey).unwrap();
+        assert_eq!(kd.p2pkh, "12PJseie1jCENoAij3Qw5crtBa4cBtagEU");
+        assert!(kd.p2wpkh.starts_with("bc1q"));
+        assert!(kd.p2tr.starts_with("bc1p"));
+    }
+
+    #[test]
+    fn test_all_address_types_different() {
+        let key = test_privkey();
+        let kd = fill_key_data(&key).unwrap();
+        // All 5 address types should be different
+        let addrs = [&kd.p2pkh, &kd.p2sh_p2wpkh, &kd.p2wpkh, &kd.p2wsh, &kd.p2tr];
+        for i in 0..addrs.len() {
+            for j in (i + 1)..addrs.len() {
+                assert_ne!(addrs[i], addrs[j]);
+            }
+        }
+    }
 }

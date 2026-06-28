@@ -15,9 +15,12 @@ pub struct TSVFile {
 }
 
 fn get_mtime(path: &str) -> u64 {
+    // SAFETY: We call libc::stat on a valid C string path.
+    // The path comes from File::open which already validated it exists.
+    // stat() fills a valid stat struct — no memory safety issues.
     unsafe {
         let mut st: libc::stat = std::mem::zeroed();
-        let c_path = std::ffi::CString::new(path).unwrap();
+        let c_path = std::ffi::CString::new(path).expect("path contains null byte");
         libc::stat(c_path.as_ptr(), &mut st);
         st.st_mtime as u64
     }
@@ -34,6 +37,9 @@ impl TSVFile {
         let mmap = unsafe { Mmap::map(&file).ok()? };
         let mmap = Arc::new(mmap);
 
+        // SAFETY: madvise is a pure advisory call — it hints to the kernel about
+        // access patterns. MADV_SEQUENTIAL tells the kernel to prefetch pages linearly.
+        // The pointer and length are valid (from Mmap which checks bounds).
         unsafe {
             libc::madvise(
                 mmap.as_ptr() as *mut libc::c_void,
@@ -55,6 +61,8 @@ impl TSVFile {
 
         if let Some((idx_offsets, idx_ds)) = load_idx(&idx_path, fsize, mtime) {
             let total_lines = idx_offsets.len();
+            // SAFETY: MADV_RANDOM tells kernel to use random access pattern.
+            // Same validity guarantees as above.
             unsafe {
                 libc::madvise(
                     mmap.as_ptr() as *mut libc::c_void,
@@ -75,6 +83,7 @@ impl TSVFile {
         let offsets = build_offsets(&mmap);
         let total_lines = offsets.len();
 
+        // SAFETY: Same as above — advisory madvise hint.
         unsafe {
             libc::madvise(
                 mmap.as_ptr() as *mut libc::c_void,

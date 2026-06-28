@@ -166,4 +166,29 @@ mod tests {
         let child = derive_child_key(&invalid, 0);
         assert_eq!(child.key, invalid.key);
     }
+
+    // Official BIP-32 test vector 1 (master key from known seed)
+    #[test]
+    fn test_bip32_vector1_master() {
+        let seed = hex_literal::hex!("000102030405060708090a0b0c0d0e0f");
+        let master = derive_master_key(&seed);
+        // Master key (m):
+        let expected_key =
+            hex_literal::hex!("e8f32e723decf4051aefac8e2c93c9c5b214313817cdb01a1494b917c8436b35");
+        let expected_chain =
+            hex_literal::hex!("873dff81c02f525623fd1fe5167eac3a55a049de3d314bb42ee227ffed37d508");
+        assert_eq!(master.key, expected_key);
+        assert_eq!(master.chain, expected_chain);
+    }
+
+    // Official BIP-32 test vector 1 (m/0')
+    #[test]
+    fn test_bip32_vector1_child_0h() {
+        let seed = hex_literal::hex!("000102030405060708090a0b0c0d0e0f");
+        let master = derive_master_key(&seed);
+        let child = derive_child_key(&master, 0x80000000);
+        let expected_key =
+            hex_literal::hex!("edb2e14f9ee77d26dd93b4ecede8d16ed408ce149b6cd80b0715a2d911a0afea");
+        assert_eq!(child.key, expected_key);
+    }
 }

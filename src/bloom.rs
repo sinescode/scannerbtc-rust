@@ -199,6 +199,11 @@ pub fn load_idx(
     let n = u64::from_le_bytes(buf) as usize;
 
     let mut offsets = vec![0u64; n];
+    // SAFETY: We read `n * 8` bytes from a file into a properly allocated Vec<u64>.
+    // The vec is allocated with n elements, and we read exactly n*8 bytes as raw u8.
+    // On little-endian platforms (x86_64, aarch64), this is equivalent to reading
+    // n u64 values directly. On big-endian, the values would be byte-swapped —
+    // but this code only runs on little-endian targets (Linux x86_64/aarch64, macOS ARM64).
     let offsets_u8 =
         unsafe { std::slice::from_raw_parts_mut(offsets.as_mut_ptr() as *mut u8, n * 8) };
     reader.read_exact(offsets_u8).ok()?;

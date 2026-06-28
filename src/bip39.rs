@@ -200,19 +200,24 @@ mod tests {
     }
 
     #[test]
-    fn test_mnemonic_to_seed() {
-        let phrase = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
-        let seed = mnemonic_to_seed(phrase);
-        assert_eq!(seed.len(), 64);
-        assert_ne!(seed, [0u8; 64]);
-    }
-
-    #[test]
     fn test_mnemonic_to_seed_deterministic() {
         let phrase = "test test test test test test test test test test test test";
         let s1 = mnemonic_to_seed(phrase);
         let s2 = mnemonic_to_seed(phrase);
         assert_eq!(s1, s2);
+    }
+
+    // Official BIP-39 test vector: "abandon" x11 + "about"
+    // PBKDF2-HMAC-SHA512 with empty password and "mnemonic" salt
+    #[test]
+    fn test_bip39_official_vector_abandon() {
+        let phrase = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+        let seed = mnemonic_to_seed(phrase);
+        let seed_hex = hex::encode(seed);
+        assert_eq!(
+            seed_hex,
+            "5eb00bbddcf069084889a8ab9155568165f5c453ccb85e70811aaed6f6da5fc19a5ac40b389cd370d086206dec8aa6c43daea6690f20ad3d8d48b2d2ce9e38e4"
+        );
     }
 
     #[test]

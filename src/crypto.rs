@@ -26,8 +26,10 @@ pub fn hash160(data: &[u8]) -> [u8; 20] {
     ripemd160(&sha256(data))
 }
 
+/// HMAC-SHA512. Panics only if key is empty (HMAC invariant).
 pub fn hmac_sha512(key: &[u8], data: &[u8]) -> [u8; 64] {
-    let mut mac = HmacSha512::new_from_slice(key).expect("HMAC key error");
+    let mut mac =
+        HmacSha512::new_from_slice(key).expect("HMAC key must not be empty (internal invariant)");
     mac.update(data);
     let result = mac.finalize().into_bytes();
     let mut out = [0u8; 64];

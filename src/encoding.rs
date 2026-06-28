@@ -112,7 +112,8 @@ pub fn encode_segwit(hrp: &[u8], witver: u8, witprog: &[u8]) -> String {
     data.extend_from_slice(&chk);
 
     let mut result = String::with_capacity(hrp.len() + 1 + data.len());
-    result.push_str(std::str::from_utf8(hrp).unwrap());
+    // SAFETY: hrp is always ASCII ("bc", "tb") — caller ensures via BIP-173
+    result.push_str(std::str::from_utf8(hrp).expect("HRP must be ASCII"));
     result.push('1');
     for &d in &data {
         result.push(BECH32_CHARSET[d as usize] as char);
@@ -196,5 +197,18 @@ mod tests {
     fn test_is_valid_rejects_header() {
         assert!(!is_valid_btc_address("address"));
         assert!(!is_valid_btc_address("balance"));
+    }
+
+    #[test]
+    fn test_bech32_known_p2wpkh() {
+        // Known P2WPKH: bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4
+        // 20-byte program
+        let program = [
+            0x75u8, 0x1e, 0x76, 0xe8, 0x19, 0x91, 0x96, 0xd4, 0x54, 0x94, 0x1c, 0x45, 0xd1, 0xad,
+            0x31, 0xc7, 0x04, 0x21, 0x26, 0x24,
+        ];
+        let addr = encode_segwit(b"bc", 0, &program);
+        assert!(addr.starts_with("bc1q"));
+        assert_eq!(addr.len(), 42);
     }
 }
