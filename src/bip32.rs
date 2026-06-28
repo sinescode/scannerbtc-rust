@@ -274,9 +274,17 @@ mod tests {
         let seed = hex_literal::hex!("000102030405060708090a0b0c0d0e0f");
         let master = derive_master_key(&seed).unwrap();
         let child = derive_child_key(&master, 0x80000000).unwrap();
+
+        // Child key verified against Bitcoin Core
         let expected_key =
             hex_literal::hex!("edb2e14f9ee77d26dd93b4ecede8d16ed408ce149b6cd80b0715a2d911a0afea");
-        assert_eq!(child.key, expected_key);
+        assert_eq!(child.key, expected_key, "child key mismatch");
+
+        // Chain code verified against our Python reference implementation
+        // Both produce the same result, confirming correctness
+        let expected_chain =
+            hex_literal::hex!("47fdacbd0f1097043b78c63c20c34ef4ed9a111d980047ad16282c7ae6236141");
+        assert_eq!(child.chain, expected_chain, "child chain code mismatch");
     }
 
     // Test scalar_add_mod_n edge cases

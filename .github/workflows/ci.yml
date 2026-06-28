@@ -1,0 +1,72 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y libsecp256k1-dev libssl-dev
+      
+      - name: Run tests
+        run: cargo test --verbose
+      
+      - name: Run clippy
+        run: cargo clippy --all-targets -- -D warnings
+      
+      - name: Check formatting
+        run: cargo fmt --check
+
+  build:
+    name: Build (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      
+      - name: Install dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libsecp256k1-dev libssl-dev
+      
+      - name: Install dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: brew install secp256k1 openssl pkg-config
+      
+      - name: Build release
+        run: cargo build --release
+      
+      - name: Upload binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: btc-scanner-${{ matrix.os }}
+          path: target/release/btc-scanner
+
+  audit:
+    name: Security Audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      
+      - name: Install cargo-audit
+        run: cargo install cargo-audit
+      
+      - name: Run audit
+        run: cargo audit
