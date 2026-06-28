@@ -1,20 +1,12 @@
 [package]
 name = "scannerbtc"
-version = "1.0.0"
+version = "2.0.0"
 edition = "2021"
 rust-version = "1.75"
 
 [[bin]]
-name = "bloom_builder"
-path = "src/bin/bloom_builder.rs"
-
-[[bin]]
-name = "scanner"
-path = "src/bin/scanner.rs"
-
-[[bin]]
-name = "bloom_checker"
-path = "src/bin/bloom_checker.rs"
+name = "btc-scanner"
+path = "src/main.rs"
 
 [dependencies]
 sha2 = "0.11"
