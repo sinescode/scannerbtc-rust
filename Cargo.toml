@@ -21,6 +21,7 @@ clap = { version = "4", features = ["derive"] }
 num_cpus = "1.17"
 libc = "0.2"
 zeroize = { version = "1", features = ["derive"] }
+unicode-normalization = "0.1"
 
 [dev-dependencies]
 tempfile = "3"

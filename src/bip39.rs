@@ -1,6 +1,7 @@
 use crate::bip32::{derive_child_key, derive_master_key, DerivationError};
 use crate::bitcoin::fill_key_data;
 use crate::crypto::{pbkdf2_hmac_sha512, random_bytes, sha256};
+use unicode_normalization::UnicodeNormalization;
 
 mod words {
     include!("bip39_words.rs");
@@ -14,12 +15,20 @@ pub const BIP39_WORD_COUNT: usize = 2048;
 #[derive(Debug)]
 pub enum MnemonicError {
     Derivation(DerivationError),
+    InvalidWordCount(usize),
+    InvalidWord(String),
+    InvalidChecksum,
 }
 
 impl std::fmt::Display for MnemonicError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             MnemonicError::Derivation(e) => write!(f, "key derivation: {}", e),
+            MnemonicError::InvalidWordCount(n) => {
+                write!(f, "invalid word count: {} (must be 12 or 24)", n)
+            }
+            MnemonicError::InvalidWord(w) => write!(f, "invalid word: '{}'", w),
+            MnemonicError::InvalidChecksum => write!(f, "mnemonic checksum verification failed"),
         }
     }
 }
@@ -30,6 +39,70 @@ impl From<DerivationError> for MnemonicError {
     fn from(e: DerivationError) -> Self {
         MnemonicError::Derivation(e)
     }
+}
+
+/// Validate a BIP-39 mnemonic phrase.
+/// Checks: word count, word validity, and checksum.
+pub fn validate_mnemonic(phrase: &str) -> Result<(), MnemonicError> {
+    // BIP-39 §4.1: normalize to NFKD
+    let normalized = phrase.nfkd().collect::<String>();
+    let words: Vec<&str> = normalized.split_whitespace().collect();
+
+    // BIP-39: valid word counts are 12, 15, 18, 21, or 24
+    match words.len() {
+        12 | 15 | 18 | 21 | 24 => {}
+        n => return Err(MnemonicError::InvalidWordCount(n)),
+    }
+
+    // Validate each word exists in the wordlist
+    for w in &words {
+        if !BIP39_WORDS.contains(w) {
+            return Err(MnemonicError::InvalidWord(w.to_string()));
+        }
+    }
+
+    // Reconstruct bit string from word indices
+    let mut bits: Vec<u8> = Vec::with_capacity(words.len() * 11);
+    for w in &words {
+        let idx = BIP39_WORDS.iter().position(|&x| x == *w).unwrap();
+        for b in (0..11).rev() {
+            bits.push(((idx >> b) & 1) as u8);
+        }
+    }
+
+    let cs_bits = words.len() / 3;
+    let total_bits = words.len() * 11;
+    let entropy_bits = total_bits - cs_bits;
+
+    // Extract checksum from bit string
+    let mut checksum_byte: u8 = 0;
+    for i in 0..cs_bits {
+        checksum_byte = (checksum_byte << 1) | bits[entropy_bits + i];
+    }
+
+    // Extract entropy bytes
+    let entropy_bytes = entropy_bits.div_ceil(8);
+    let mut entropy = vec![0u8; entropy_bytes];
+    for (i, chunk) in bits[..entropy_bits].chunks(8).enumerate() {
+        let mut byte = 0u8;
+        for &b in chunk {
+            byte = (byte << 1) | b;
+        }
+        if i < entropy.len() {
+            entropy[i] = byte;
+        }
+    }
+
+    // Verify checksum: first cs_bits of SHA256(entropy)
+    let h = sha256(&entropy);
+    let expected_cs = h[0] >> (8 - cs_bits);
+    let actual_cs = checksum_byte & ((1 << cs_bits) - 1);
+
+    if expected_cs != actual_cs {
+        return Err(MnemonicError::InvalidChecksum);
+    }
+
+    Ok(())
 }
 
 pub fn generate_mnemonic(word_count: usize) -> String {
@@ -72,8 +145,20 @@ pub fn generate_mnemonic(word_count: usize) -> String {
     result
 }
 
-pub fn mnemonic_to_seed(phrase: &str) -> [u8; 64] {
-    pbkdf2_hmac_sha512(phrase.as_bytes(), b"mnemonic", 2048)
+/// Convert mnemonic phrase to seed.
+///
+/// BIP-39 §4.2: The mnemonic sentence (in NFKD normalization) is used as
+/// the password, and the string "mnemonic" + optional passphrase (both NFKD)
+/// is used as the salt. PBKDF2-HMAC-SHA512 with 2048 iterations.
+pub fn mnemonic_to_seed(phrase: &str, passphrase: &str) -> [u8; 64] {
+    // BIP-39: NFKD normalize both mnemonic and passphrase
+    let normalized_phrase = phrase.nfkd().collect::<String>();
+    let normalized_passphrase = passphrase.nfkd().collect::<String>();
+    // Salt = "mnemonic" + normalized passphrase
+    let mut salt = Vec::with_capacity(8 + normalized_passphrase.len());
+    salt.extend_from_slice(b"mnemonic");
+    salt.extend_from_slice(normalized_passphrase.as_bytes());
+    pbkdf2_hmac_sha512(normalized_phrase.as_bytes(), &salt, 2048)
 }
 
 #[derive(Clone)]
@@ -92,7 +177,7 @@ pub fn generate_mnemonic_addresses(
     phrase: &str,
     depth: usize,
 ) -> Result<Vec<MnemonicRecord>, MnemonicError> {
-    let seed = mnemonic_to_seed(phrase);
+    let seed = mnemonic_to_seed(phrase, "");
     let master = derive_master_key(&seed)?;
 
     struct PurposeInfo {
@@ -233,22 +318,64 @@ mod tests {
     #[test]
     fn test_mnemonic_to_seed_deterministic() {
         let phrase = "test test test test test test test test test test test test";
-        let s1 = mnemonic_to_seed(phrase);
-        let s2 = mnemonic_to_seed(phrase);
+        let s1 = mnemonic_to_seed(phrase, "");
+        let s2 = mnemonic_to_seed(phrase, "");
         assert_eq!(s1, s2);
     }
 
     // Official BIP-39 test vector: "abandon" x11 + "about"
-    // PBKDF2-HMAC-SHA512 with empty password and "mnemonic" salt
     #[test]
     fn test_bip39_official_vector_abandon() {
         let phrase = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
-        let seed = mnemonic_to_seed(phrase);
+        let seed = mnemonic_to_seed(phrase, "");
         let seed_hex = hex::encode(seed);
         assert_eq!(
             seed_hex,
             "5eb00bbddcf069084889a8ab9155568165f5c453ccb85e70811aaed6f6da5fc19a5ac40b389cd370d086206dec8aa6c43daea6690f20ad3d8d48b2d2ce9e38e4"
         );
+    }
+
+    #[test]
+    fn test_validate_mnemonic_valid() {
+        let phrase = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+        assert!(validate_mnemonic(phrase).is_ok());
+    }
+
+    #[test]
+    fn test_validate_mnemonic_invalid_word() {
+        let phrase = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon invalid";
+        assert!(matches!(
+            validate_mnemonic(phrase),
+            Err(MnemonicError::InvalidWord(_))
+        ));
+    }
+
+    #[test]
+    fn test_validate_mnemonic_wrong_checksum() {
+        // "abandon" x11 + "ability" has wrong checksum
+        let phrase = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon ability";
+        assert!(matches!(
+            validate_mnemonic(phrase),
+            Err(MnemonicError::InvalidChecksum)
+        ));
+    }
+
+    #[test]
+    fn test_validate_mnemonic_wrong_count() {
+        let phrase = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon";
+        assert!(matches!(
+            validate_mnemonic(phrase),
+            Err(MnemonicError::InvalidWordCount(11))
+        ));
+    }
+
+    #[test]
+    fn test_nfk_normalization() {
+        // BIP-39 requires NFKD normalization
+        // These should produce the same seed
+        let s1 = mnemonic_to_seed("café", "");
+        let s2 = mnemonic_to_seed("cafe\u{0301}", ""); // combining accent
+        assert_eq!(s1, s2);
     }
 
     #[test]

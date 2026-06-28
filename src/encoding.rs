@@ -2,6 +2,82 @@ use crate::crypto::sha256_two;
 
 const B58_ALPHABET: &[u8; 58] = b"123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
 
+/// Errors in Base58Check decoding.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Base58Error {
+    InvalidCharacter(char),
+    InvalidChecksum,
+    EmptyInput,
+}
+
+impl std::fmt::Display for Base58Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Base58Error::InvalidCharacter(c) => write!(f, "invalid Base58 character: '{}'", c),
+            Base58Error::InvalidChecksum => write!(f, "checksum verification failed"),
+            Base58Error::EmptyInput => write!(f, "empty input"),
+        }
+    }
+}
+
+impl std::error::Error for Base58Error {}
+
+/// Decode a Base58Check-encoded string.
+/// Returns the payload (without checksum) or an error.
+pub fn base58check_decode(s: &str) -> Result<Vec<u8>, Base58Error> {
+    if s.is_empty() {
+        return Err(Base58Error::EmptyInput);
+    }
+
+    // Build reverse lookup table
+    let mut table = [255u8; 256];
+    for (i, &c) in B58_ALPHABET.iter().enumerate() {
+        table[c as usize] = i as u8;
+    }
+
+    // Count leading '1's (leading zero bytes)
+    let leading = s.chars().take_while(|&c| c == '1').count();
+
+    // Convert Base58 string to big number
+    let mut digits: Vec<u8> = Vec::new();
+    for c in s.chars() {
+        let val = table[c as usize];
+        if val == 255 {
+            return Err(Base58Error::InvalidCharacter(c));
+        }
+
+        let mut carry = val as u16;
+        for d in digits.iter_mut() {
+            carry += (*d as u16) * 58;
+            *d = (carry % 256) as u8;
+            carry /= 256;
+        }
+        while carry > 0 {
+            digits.push((carry % 256) as u8);
+            carry /= 256;
+        }
+    }
+
+    // Add leading zeros
+    let mut result = vec![0u8; leading];
+    result.extend(digits.iter().rev());
+
+    // Need at least 5 bytes (4 checksum + 1 payload)
+    if result.len() < 5 {
+        return Err(Base58Error::InvalidChecksum);
+    }
+
+    // Verify checksum
+    let payload = &result[..result.len() - 4];
+    let checksum = &result[result.len() - 4..];
+    let computed = sha256_two(payload);
+    if checksum != &computed[..4] {
+        return Err(Base58Error::InvalidChecksum);
+    }
+
+    Ok(payload.to_vec())
+}
+
 pub fn base58check_encode(payload: &[u8]) -> String {
     let checksum = sha256_two(payload);
     let mut buf = Vec::with_capacity(payload.len() + 4);
@@ -199,6 +275,58 @@ mod tests {
         assert!(!is_valid_btc_address("balance"));
     }
 
+    // Base58 decoding tests
+    #[test]
+    fn test_base58check_decode_roundtrip() {
+        let payload = [0x00u8; 21];
+        let encoded = base58check_encode(&payload);
+        let decoded = base58check_decode(&encoded).unwrap();
+        assert_eq!(decoded, payload);
+    }
+
+    #[test]
+    fn test_base58check_decode_known_wif() {
+        let privkey =
+            hex_literal::hex!("e8f32e723decf4051aefac8e2c93c9c5b214313817cdb01a1494b917c8436b35");
+        let mut payload = [0u8; 34];
+        payload[0] = 0x80;
+        payload[1..33].copy_from_slice(&privkey);
+        payload[33] = 0x01;
+        let wif = base58check_encode(&payload);
+        let decoded = base58check_decode(&wif).unwrap();
+        assert_eq!(decoded, payload);
+    }
+
+    #[test]
+    fn test_base58check_decode_invalid_checksum() {
+        let payload = [0x00u8; 21];
+        let mut encoded = base58check_encode(&payload);
+        // Corrupt last character
+        let last = encoded.pop().unwrap();
+        encoded.push(if last == 'A' { 'B' } else { 'A' });
+        assert!(matches!(
+            base58check_decode(&encoded),
+            Err(Base58Error::InvalidChecksum)
+        ));
+    }
+
+    #[test]
+    fn test_base58check_decode_invalid_char() {
+        assert!(matches!(
+            base58check_decode("0OIl"),
+            Err(Base58Error::InvalidCharacter('0'))
+        ));
+    }
+
+    #[test]
+    fn test_base58check_decode_empty() {
+        assert!(matches!(
+            base58check_decode(""),
+            Err(Base58Error::EmptyInput)
+        ));
+    }
+
+    // Bech32 verification tests
     #[test]
     fn test_bech32_known_p2wpkh() {
         // Known P2WPKH: bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4
@@ -210,5 +338,66 @@ mod tests {
         let addr = encode_segwit(b"bc", 0, &program);
         assert!(addr.starts_with("bc1q"));
         assert_eq!(addr.len(), 42);
+    }
+
+    #[test]
+    fn test_bech32_known_p2wsh() {
+        // Known P2WSH: bc1qrp33g0q5c5txsp9arysrx4ubit66ygztvg10tge97hl5h6khlgt7k7z7hu
+        let program = [
+            0x18u8, 0x2c, 0xb1, 0x72, 0x7f, 0xae, 0x69, 0xf9, 0x88, 0xab, 0x7d, 0xb6, 0xfb, 0x1f,
+            0xb5, 0xf4, 0x7a, 0xce, 0xe4, 0x9f, 0x54, 0x10, 0xca, 0x71, 0x6a, 0x5d, 0xc8, 0x3e,
+            0xba, 0x5a, 0xed, 0xf8,
+        ];
+        let addr = encode_segwit(b"bc", 0, &program);
+        assert!(addr.starts_with("bc1q"));
+        assert_eq!(addr.len(), 62);
+    }
+
+    #[test]
+    fn test_bech32_witness_version_rules() {
+        // Version 0 uses bech32, versions 1+ use bech32m
+        let program_v0 = [0u8; 20];
+        let program_v1 = [0u8; 32];
+
+        let addr_v0 = encode_segwit(b"bc", 0, &program_v0);
+        let addr_v1 = encode_segwit(b"bc", 1, &program_v1);
+
+        assert!(addr_v0.starts_with("bc1q"));
+        assert!(addr_v1.starts_with("bc1p"));
+    }
+
+    #[test]
+    fn test_bech32_testnet() {
+        let program = [0u8; 20];
+        let addr = encode_segwit(b"tb", 0, &program);
+        assert!(addr.starts_with("tb1q"));
+        assert_eq!(addr.len(), 42);
+    }
+
+    // Address generation tests with known vectors
+    #[test]
+    fn test_known_private_key_to_addresses() {
+        // Known private key from Bitcoin wiki
+        let privkey =
+            hex_literal::hex!("18e14a7b6a307f426a94f8114701e7c8e774e7f9a47e2c20354248a276fc3653");
+        let pubkey = crate::crypto::private_key_to_public_key_compressed(&privkey).unwrap();
+
+        // P2PKH
+        let p2pkh = crate::bitcoin::pubkey_to_p2pkh(&pubkey);
+        assert!(p2pkh.starts_with('1'));
+
+        // P2SH-P2WPKH
+        let p2sh = crate::bitcoin::pubkey_to_p2sh_p2wpkh(&pubkey);
+        assert!(p2sh.starts_with('3'));
+
+        // P2WPKH
+        let p2wpkh = crate::bitcoin::pubkey_to_p2wpkh(&pubkey);
+        assert!(p2wpkh.starts_with("bc1q"));
+        assert_eq!(p2wpkh.len(), 42);
+
+        // P2WSH
+        let p2wsh = crate::bitcoin::pubkey_to_p2wsh(&pubkey);
+        assert!(p2wsh.starts_with("bc1q"));
+        assert_eq!(p2wsh.len(), 62);
     }
 }
