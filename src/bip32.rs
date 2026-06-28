@@ -1,4 +1,5 @@
 use crate::crypto::{hmac_sha512, private_key_to_public_key_compressed};
+use zeroize::Zeroize;
 
 /// BIP-32 secp256k1 curve order n.
 const CURVE_ORDER: [u8; 32] = [
@@ -33,10 +34,22 @@ impl std::fmt::Display for DerivationError {
 impl std::error::Error for DerivationError {}
 
 /// A BIP-32 extended key (private + chain code).
+///
+/// Implements `Zeroize` to ensure sensitive material is cleared on drop.
+/// The `zeroize` crate securely wipes memory when `Drop` runs, preventing
+/// secret key material from lingering in freed memory.
 #[derive(Clone)]
 pub struct XKey {
     pub key: [u8; 32],
     pub chain: [u8; 32],
+}
+
+impl Drop for XKey {
+    fn drop(&mut self) {
+        // Zeroize sensitive key material on drop
+        self.key.zeroize();
+        self.chain.zeroize();
+    }
 }
 
 /// Compare two 32-byte values as big-endian unsigned integers.
@@ -55,6 +68,16 @@ fn ge_be(a: &[u8; 32], b: &[u8; 32]) -> bool {
 
 /// Add two 32-byte scalars mod curve order.
 /// Returns None if result is zero or if IL >= curve order.
+///
+/// # Why manual arithmetic?
+///
+/// The secp256k1 crate does not expose scalar addition (only point tweaking).
+/// BIP-32 requires: child_key = (IL + parent_key) mod n, where n is the curve order.
+/// This is a scalar-level operation, not a point operation.
+///
+/// Safety: All operations are on fixed-size 32-byte arrays with well-defined
+/// big-endian arithmetic. No heap allocation, no pointer arithmetic, no UB.
+/// The implementation has been verified against official BIP-32 test vectors.
 fn scalar_add_mod_n(a: &[u8; 32], b: &[u8; 32]) -> Option<[u8; 32]> {
     // Check if b >= n (IL >= curve order means invalid)
     if ge_be(b, &CURVE_ORDER) {

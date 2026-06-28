@@ -1,4 +1,6 @@
-use crate::crypto::{hash160, private_key_to_public_key_compressed, public_key_to_xonly, sha256};
+use crate::crypto::{
+    hash160, private_key_to_public_key_compressed, public_key_to_xonly, sha256, SECP,
+};
 use crate::encoding::{base58check_encode, encode_segwit};
 
 #[derive(Clone)]
@@ -61,12 +63,11 @@ fn privkey_to_wif(privkey: &[u8; 32]) -> String {
 }
 
 pub fn privkey_to_p2tr(privkey: &[u8; 32], xonly_out: &mut [u8; 32]) -> String {
-    let secp = secp256k1::Secp256k1::new();
     let secret = match secp256k1::SecretKey::from_byte_array(*privkey) {
         Ok(s) => s,
         Err(_) => return String::new(),
     };
-    let public = secp256k1::PublicKey::from_secret_key(&secp, &secret);
+    let public = secp256k1::PublicKey::from_secret_key(&SECP, &secret);
     let pub33 = public.serialize();
 
     let mut xonly_internal = [0u8; 32];
@@ -92,7 +93,7 @@ pub fn privkey_to_p2tr(privkey: &[u8; 32], xonly_out: &mut [u8; 32]) -> String {
             }
         }
         if let Ok(sk) = secp256k1::SecretKey::from_byte_array(priv_even) {
-            let pk = secp256k1::PublicKey::from_secret_key(&secp, &sk);
+            let pk = secp256k1::PublicKey::from_secret_key(&SECP, &sk);
             let p = pk.serialize();
             xonly_internal.copy_from_slice(&p[1..33]);
         }
@@ -151,7 +152,7 @@ pub fn privkey_to_p2tr(privkey: &[u8; 32], xonly_out: &mut [u8; 32]) -> String {
     }
 
     if let Ok(sk) = secp256k1::SecretKey::from_byte_array(tweaked_priv) {
-        let pk = secp256k1::PublicKey::from_secret_key(&secp, &sk);
+        let pk = secp256k1::PublicKey::from_secret_key(&SECP, &sk);
         let p = pk.serialize();
         xonly_out.copy_from_slice(&p[1..33]);
         encode_segwit(b"bc", 1, &p[1..33])

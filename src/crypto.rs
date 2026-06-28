@@ -3,8 +3,13 @@ use rand::RngCore;
 use ripemd::Ripemd160;
 use secp256k1::{PublicKey, Secp256k1, SecretKey};
 use sha2::{Digest, Sha256};
+use std::sync::LazyLock;
 
 type HmacSha512 = Hmac<sha2::Sha512>;
+
+/// Reusable secp256k1 context (thread-safe, created once).
+/// Public so other modules can use it without creating new contexts.
+pub static SECP: LazyLock<Secp256k1<secp256k1::All>> = LazyLock::new(Secp256k1::new);
 
 pub fn sha256(data: &[u8]) -> [u8; 32] {
     let mut hasher = Sha256::new();
@@ -58,9 +63,8 @@ pub fn generate_random_private_key() -> [u8; 32] {
 }
 
 pub fn private_key_to_public_key_compressed(privkey: &[u8; 32]) -> Option<[u8; 33]> {
-    let secp = Secp256k1::new();
     let secret = SecretKey::from_byte_array(*privkey).ok()?;
-    let public = PublicKey::from_secret_key(&secp, &secret);
+    let public = PublicKey::from_secret_key(&SECP, &secret);
     let mut out = [0u8; 33];
     out.copy_from_slice(&public.serialize());
     Some(out)
