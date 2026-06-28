@@ -1,0 +1,38 @@
+[package]
+name = "scannerbtc"
+version = "1.0.0"
+edition = "2021"
+rust-version = "1.75"
+
+[[bin]]
+name = "bloom_builder"
+path = "src/bin/bloom_builder.rs"
+
+[[bin]]
+name = "scanner"
+path = "src/bin/scanner.rs"
+
+[[bin]]
+name = "bloom_checker"
+path = "src/bin/bloom_checker.rs"
+
+[dependencies]
+sha2 = "0.11"
+ripemd = "0.2"
+hmac = "0.13"
+secp256k1 = { version = "0.31", features = ["global-context", "rand"] }
+rand = "0.9"
+memmap2 = "0.9"
+pbkdf2 = { version = "0.13", features = ["hmac"] }
+hex = "0.4"
+clap = { version = "4", features = ["derive"] }
+num_cpus = "1.17"
+libc = "0.2"
+
+[dev-dependencies]
+tempfile = "3"
+hex-literal = "1.1"
+
+[profile.release]
+opt-level = 3
+lto = true
