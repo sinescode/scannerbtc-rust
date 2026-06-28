@@ -1,4 +1,4 @@
-use crate::bip32::{derive_child_key, derive_master_key};
+use crate::bip32::{derive_child_key, derive_master_key, DerivationError};
 use crate::bitcoin::fill_key_data;
 use crate::crypto::{pbkdf2_hmac_sha512, random_bytes, sha256};
 
@@ -9,6 +9,28 @@ mod words {
 pub use words::BIP39_WORDS;
 
 pub const BIP39_WORD_COUNT: usize = 2048;
+
+/// Errors in mnemonic/seed operations.
+#[derive(Debug)]
+pub enum MnemonicError {
+    Derivation(DerivationError),
+}
+
+impl std::fmt::Display for MnemonicError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            MnemonicError::Derivation(e) => write!(f, "key derivation: {}", e),
+        }
+    }
+}
+
+impl std::error::Error for MnemonicError {}
+
+impl From<DerivationError> for MnemonicError {
+    fn from(e: DerivationError) -> Self {
+        MnemonicError::Derivation(e)
+    }
+}
 
 pub fn generate_mnemonic(word_count: usize) -> String {
     let entropy_bytes = if word_count == 24 { 32 } else { 16 };
@@ -66,9 +88,12 @@ pub struct MnemonicRecord {
     pub mnemonic: String,
 }
 
-pub fn generate_mnemonic_addresses(phrase: &str, depth: usize) -> Vec<MnemonicRecord> {
+pub fn generate_mnemonic_addresses(
+    phrase: &str,
+    depth: usize,
+) -> Result<Vec<MnemonicRecord>, MnemonicError> {
     let seed = mnemonic_to_seed(phrase);
-    let master = derive_master_key(&seed);
+    let master = derive_master_key(&seed)?;
 
     struct PurposeInfo {
         purpose: u32,
@@ -102,19 +127,25 @@ pub fn generate_mnemonic_addresses(phrase: &str, depth: usize) -> Vec<MnemonicRe
     let mut records = Vec::new();
 
     for pi in &purposes {
-        let k = derive_child_key(
+        let k = match derive_child_key(
             &derive_child_key(
                 &derive_child_key(
-                    &derive_child_key(&master, pi.purpose | 0x80000000),
+                    &derive_child_key(&master, pi.purpose | 0x80000000)?,
                     0x80000000,
-                ),
+                )?,
                 0x80000000,
-            ),
+            )?,
             0,
-        );
+        ) {
+            Ok(k) => k,
+            Err(_) => continue,
+        };
 
         for i in 0..depth {
-            let ck = derive_child_key(&k, i as u32);
+            let ck = match derive_child_key(&k, i as u32) {
+                Ok(ck) => ck,
+                Err(_) => continue,
+            };
             let kd = match fill_key_data(&ck.key) {
                 Some(kd) => kd,
                 None => continue,
@@ -150,7 +181,7 @@ pub fn generate_mnemonic_addresses(phrase: &str, depth: usize) -> Vec<MnemonicRe
         }
     }
 
-    records
+    Ok(records)
 }
 
 #[cfg(test)]
@@ -223,7 +254,7 @@ mod tests {
     #[test]
     fn test_generate_mnemonic_addresses() {
         let phrase = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
-        let records = generate_mnemonic_addresses(phrase, 1);
+        let records = generate_mnemonic_addresses(phrase, 1).unwrap();
         assert!(!records.is_empty());
         for r in &records {
             assert!(!r.address.is_empty());
@@ -235,8 +266,8 @@ mod tests {
     #[test]
     fn test_generate_mnemonic_addresses_depth() {
         let phrase = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
-        let r1 = generate_mnemonic_addresses(phrase, 1);
-        let r2 = generate_mnemonic_addresses(phrase, 2);
+        let r1 = generate_mnemonic_addresses(phrase, 1).unwrap();
+        let r2 = generate_mnemonic_addresses(phrase, 2).unwrap();
         assert!(r2.len() > r1.len());
     }
 }

@@ -682,7 +682,10 @@ fn worker_func(cfg: WorkerConfig) {
                 cfg.words
             };
             let mnemonic_str = generate_mnemonic(wc);
-            let records = generate_mnemonic_addresses(&mnemonic_str, cfg.depth);
+            let records = match generate_mnemonic_addresses(&mnemonic_str, cfg.depth) {
+                Ok(r) => r,
+                Err(_) => continue,
+            };
             let count = records.len() as u64;
 
             for r in &records {
