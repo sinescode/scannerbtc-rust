@@ -174,20 +174,19 @@ impl BloomFilterBuilder {
         }
     }
 
-    fn save(&self, path: &str) {
-        let f = File::create(path).expect("Cannot open output");
+    fn save(&self, path: &str) -> std::io::Result<()> {
+        let f = File::create(path)?;
         let mut writer = BufWriter::new(f);
-        writer.write_all(&[3]).unwrap();
-        writer.write_all(&self.k0.to_le_bytes()).unwrap();
-        writer.write_all(&self.k1.to_le_bytes()).unwrap();
-        writer
-            .write_all(&(self.k_num as u32).to_le_bytes())
-            .unwrap();
-        writer.write_all(&self.bitmap_bytes.to_le_bytes()).unwrap();
+        writer.write_all(&[3])?;
+        writer.write_all(&self.k0.to_le_bytes())?;
+        writer.write_all(&self.k1.to_le_bytes())?;
+        writer.write_all(&(self.k_num as u32).to_le_bytes())?;
+        writer.write_all(&self.bitmap_bytes.to_le_bytes())?;
         for i in 0..self.bitmap_bytes as usize {
             let v = self.bitmap[i].load(Ordering::Relaxed);
-            writer.write_all(&[v]).unwrap();
+            writer.write_all(&[v])?;
         }
+        Ok(())
     }
 }
 
@@ -432,7 +431,10 @@ fn cmd_build(input: &str, output: &str, expected: u64, fpp: f64) {
     println!();
 
     println!("{}  ⟳{}  Saving...", ANSI_YELLOW, ANSI_RESET);
-    bloom.save(output);
+    if let Err(e) = bloom.save(output) {
+        eprintln!("Failed to save bloom filter: {}", e);
+        std::process::exit(1);
+    }
     let file_size = std::fs::metadata(output).map(|m| m.len()).unwrap_or(0);
     println!(
         "{}  ✔{}  {}  ({})  {}v3 format — k_num stored{}",
@@ -562,11 +564,13 @@ impl HitLogger {
         mnemonic: &str,
         path: &str,
     ) {
-        let _lock = self.mutex.lock().unwrap();
+        // Mutex poisoning is unrecoverable — if a thread panics while holding
+        // the lock, we must not continue writing corrupted data.
+        let _lock = self.mutex.lock().expect("mutex poisoned");
         if let Some(ref mut f) = self.file {
             let now = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
+                .expect("system time before UNIX epoch")
                 .as_secs();
             let ts = format!(
                 "{}-{:02}-{:02}T{:02}:{:02}:{:02}",
@@ -693,16 +697,18 @@ fn worker_func(cfg: WorkerConfig) {
                 if hit {
                     cfg.hits.fetch_add(1, Ordering::Relaxed);
                     if let Some(ref logger) = cfg.logger {
-                        logger.lock().unwrap().log(
-                            &r.address,
-                            &r.addr_type,
-                            &r.wif,
-                            &r.priv_hex,
-                            &r.compressed_pub_hex,
-                            &r.xonly_pub_hex,
-                            &r.mnemonic,
-                            &r.derivation_path,
-                        );
+                        if let Ok(mut log) = logger.lock() {
+                            log.log(
+                                &r.address,
+                                &r.addr_type,
+                                &r.wif,
+                                &r.priv_hex,
+                                &r.compressed_pub_hex,
+                                &r.xonly_pub_hex,
+                                &r.mnemonic,
+                                &r.derivation_path,
+                            );
+                        }
                     }
                     println!(
                         "\n{}{}🎯 HIT! {} {}{}",
@@ -1154,7 +1160,7 @@ fn cmd_check(tsv_path: &str, bloom_path: &str, out_path: &str) {
     );
 
     let _total_missing = g_missing.load(Ordering::Relaxed);
-    let mut writers_guard = writers.lock().unwrap();
+    let mut writers_guard = writers.lock().expect("mutex poisoned");
     let mut writers_vec: Vec<ThreadWriter> = writers_guard.drain(..).flatten().collect();
     drop(writers_guard);
     merge_outputs(out_path, &mut writers_vec);
