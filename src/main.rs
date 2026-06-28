@@ -1,5 +1,6 @@
 use clap::{Parser, Subcommand};
 use rand::Rng;
+use rand::RngCore;
 use std::fs::File;
 use std::io::{BufReader, BufWriter, Read, Write};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -57,6 +58,62 @@ fn fmt_rate(r: f64) -> String {
     } else {
         format!("{}/s", r as u64)
     }
+}
+
+/// Format Unix timestamp as ISO 8601 UTC string (YYYY-MM-DDTHH:MM:SS).
+fn format_timestamp(secs: u64) -> String {
+    // Simple calendar math for UTC
+    let days = secs / 86400;
+    let time_of_day = secs % 86400;
+    let hours = time_of_day / 3600;
+    let minutes = (time_of_day % 3600) / 60;
+    let seconds = time_of_day % 60;
+
+    // Days since epoch to year/month/day
+    // Using a simple algorithm that handles leap years
+    let mut y = 1970u32;
+    let mut remaining = days;
+    loop {
+        let days_in_year = if is_leap_year(y) { 366 } else { 365 };
+        if remaining < days_in_year as u64 {
+            break;
+        }
+        remaining -= days_in_year as u64;
+        y += 1;
+    }
+
+    let month_days = [
+        31,
+        if is_leap_year(y) { 29 } else { 28 },
+        31,
+        30,
+        31,
+        30,
+        31,
+        31,
+        30,
+        31,
+        30,
+        31,
+    ];
+    let mut m = 1u32;
+    for &md in &month_days {
+        if remaining < md as u64 {
+            break;
+        }
+        remaining -= md as u64;
+        m += 1;
+    }
+    let d = remaining + 1;
+
+    format!(
+        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}",
+        y, m, d, hours, minutes, seconds
+    )
+}
+
+fn is_leap_year(y: u32) -> bool {
+    (y % 4 == 0 && y % 100 != 0) || (y % 400 == 0)
 }
 
 // ─── CLI ─────────────────────────────────────────────────────────────────────
@@ -152,14 +209,20 @@ impl BloomFilterBuilder {
             .map(|_| std::sync::atomic::AtomicU8::new(0))
             .collect();
 
+        // Randomize k0/k1 for security (prevents preimage attacks on Bloom filter)
+        let mut k0_bytes = [0u8; 8];
+        let mut k1_bytes = [0u8; 8];
+        rand::rng().fill_bytes(&mut k0_bytes);
+        rand::rng().fill_bytes(&mut k1_bytes);
+
         BloomFilterBuilder {
             bitmap,
             bitmap_bytes,
             bitmap_bits,
             mask,
             k_num,
-            k0: 0,
-            k1: 0,
+            k0: u64::from_le_bytes(k0_bytes),
+            k1: u64::from_le_bytes(k1_bytes),
         }
     }
 
@@ -321,7 +384,10 @@ fn cmd_build(input: &str, output: &str, expected: u64, fpp: f64) {
         fmt_bytes(bloom.bitmap_bytes),
         ANSI_RESET
     );
-    println!("    seeds:      {}k0=0 k1=0{}", ANSI_CYAN, ANSI_RESET);
+    println!(
+        "    seeds:      {}k0={} k1={}{}",
+        ANSI_CYAN, bloom.k0, bloom.k1, ANSI_RESET
+    );
     println!();
 
     println!(
@@ -566,21 +632,17 @@ impl HitLogger {
     ) {
         // Mutex poisoning is unrecoverable — if a thread panics while holding
         // the lock, we must not continue writing corrupted data.
-        let _lock = self.mutex.lock().expect("mutex poisoned");
+        let _lock = self
+            .mutex
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
         if let Some(ref mut f) = self.file {
             let now = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .expect("system time before UNIX epoch")
                 .as_secs();
-            let ts = format!(
-                "{}-{:02}-{:02}T{:02}:{:02}:{:02}",
-                1970 + (now / 31557600) as u16,
-                ((now % 31557600) / 2592000) as u8 + 1,
-                ((now % 2592000) / 86400) as u8 + 1,
-                (now % 86400 / 3600) as u8,
-                (now % 3600 / 60) as u8,
-                (now % 60) as u8,
-            );
+            // Proper UTC date formatting using simple calendar math
+            let ts = format_timestamp(now);
             writeln!(
                 f,
                 "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
