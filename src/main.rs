@@ -784,9 +784,9 @@ fn cmd_scan(
     }
 
     let bloom = match BloomFilter::load(bloom_path) {
-        Some(b) => Arc::new(b),
-        None => {
-            eprintln!("Failed to load bloom filter.");
+        Ok(b) => Arc::new(b),
+        Err(e) => {
+            eprintln!("Failed to load bloom filter: {}", e);
             std::process::exit(1);
         }
     };
@@ -953,9 +953,9 @@ fn cmd_check(tsv_path: &str, bloom_path: &str, out_path: &str) {
     println!();
 
     let mut bloom = match BloomFilter::load(bloom_path) {
-        Some(b) => b,
-        None => {
-            eprintln!("Cannot load bloom filter.");
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!("Cannot load bloom filter: {}", e);
             std::process::exit(1);
         }
     };

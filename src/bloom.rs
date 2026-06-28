@@ -6,6 +6,45 @@ use crate::siphash::{siphash13_double, SipPair};
 
 const IDX_MAGIC: u64 = 0x5458564944585801;
 
+/// Errors in Bloom filter operations.
+#[derive(Debug)]
+pub enum BloomError {
+    Io(std::io::Error),
+    InvalidVersion(u8),
+    InvalidFileSize { expected: u64, actual: u64 },
+    TruncatedFile,
+    InvalidBitmapSize(u64),
+}
+
+impl std::fmt::Display for BloomError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            BloomError::Io(e) => write!(f, "I/O error: {}", e),
+            BloomError::InvalidVersion(v) => {
+                write!(f, "unsupported bloom version: {} (expected 1, 2, or 3)", v)
+            }
+            BloomError::InvalidFileSize { expected, actual } => {
+                write!(
+                    f,
+                    "file size mismatch: expected {}, got {}",
+                    expected, actual
+                )
+            }
+            BloomError::TruncatedFile => write!(f, "bloom file truncated"),
+            BloomError::InvalidBitmapSize(s) => write!(f, "invalid bitmap size: {} bytes", s),
+        }
+    }
+}
+
+impl std::error::Error for BloomError {}
+
+impl From<std::io::Error> for BloomError {
+    fn from(e: std::io::Error) -> Self {
+        BloomError::Io(e)
+    }
+}
+
+#[derive(Debug)]
 pub struct BloomFilter {
     pub bitmap: Vec<u8>,
     pub bitmap_bits: u64,
@@ -17,11 +56,25 @@ pub struct BloomFilter {
 }
 
 impl BloomFilter {
-    pub fn load(path: &str) -> Option<Self> {
-        let mut f = File::open(path).ok()?;
+    /// Load a Bloom filter from a file.
+    ///
+    /// Validates:
+    /// - File is not empty
+    /// - Version byte is 1, 2, or 3
+    /// - All header fields can be read (not truncated)
+    /// - Bitmap size is reasonable (> 0, not absurdly large)
+    pub fn load(path: &str) -> Result<Self, BloomError> {
+        let mut f = File::open(path)?;
+
+        // Read version byte
         let mut ver_buf = [0u8; 1];
-        f.read_exact(&mut ver_buf).ok()?;
+        f.read_exact(&mut ver_buf)?;
         let ver = ver_buf[0];
+
+        // Validate version
+        if ver != 1 && ver != 2 && ver != 3 {
+            return Err(BloomError::InvalidVersion(ver));
+        }
 
         let mut k0: u64 = 0;
         let mut k1: u64 = 0;
@@ -30,30 +83,45 @@ impl BloomFilter {
 
         if ver == 3 {
             let mut buf = [0u8; 8];
-            f.read_exact(&mut buf).ok()?;
+            f.read_exact(&mut buf)?;
             k0 = u64::from_le_bytes(buf);
-            f.read_exact(&mut buf).ok()?;
+            f.read_exact(&mut buf)?;
             k1 = u64::from_le_bytes(buf);
             let mut k32 = [0u8; 4];
-            f.read_exact(&mut k32).ok()?;
+            f.read_exact(&mut k32)?;
             k_num = u32::from_le_bytes(k32) as i32;
             k_stored = true;
         } else if ver == 2 {
             let mut buf = [0u8; 8];
-            f.read_exact(&mut buf).ok()?;
+            f.read_exact(&mut buf)?;
             k0 = u64::from_le_bytes(buf);
-            f.read_exact(&mut buf).ok()?;
+            f.read_exact(&mut buf)?;
             k1 = u64::from_le_bytes(buf);
-        } else if ver != 1 {
-            return None;
         }
+        // ver == 1: no k0/k1 stored
 
+        // Read bitmap length
         let mut blen_buf = [0u8; 8];
-        f.read_exact(&mut blen_buf).ok()?;
+        f.read_exact(&mut blen_buf)?;
         let blen = u64::from_le_bytes(blen_buf);
 
+        // Validate bitmap size
+        if blen == 0 {
+            return Err(BloomError::InvalidBitmapSize(0));
+        }
+        // Sanity check: bitmap should not exceed 1GB
+        if blen > 1_073_741_824 {
+            return Err(BloomError::InvalidBitmapSize(blen));
+        }
+
+        // Read bitmap
         let mut bitmap = vec![0u8; blen as usize];
-        f.read_exact(&mut bitmap).ok()?;
+        f.read_exact(&mut bitmap)?;
+
+        // Validate we read the full file (detect truncation)
+        // It's OK if we can't read more — that means we're at EOF
+        // But if we can read more, the file is larger than expected
+        // (which is fine for forward compatibility)
 
         let bitmap_bits = blen * 8;
         let b2 = blen.next_power_of_two();
@@ -64,7 +132,7 @@ impl BloomFilter {
             k_num = 0;
         }
 
-        Some(BloomFilter {
+        Ok(BloomFilter {
             bitmap,
             bitmap_bits,
             mask,
@@ -87,25 +155,39 @@ impl BloomFilter {
         self.k_num = k.floor().max(1.0) as i32;
     }
 
+    /// Check if an address is possibly in the Bloom filter.
+    ///
+    /// Returns false = DEFINITELY NOT PRESENT (100% certain).
+    /// Returns true = POSSIBLY PRESENT (may be false positive).
+    ///
+    /// # Safety
+    ///
+    /// The bitmap indexing uses `byte_idx = bit >> 3` where `bit < bitmap_bits`.
+    /// Since `bitmap_bits = bitmap.len() * 8`, we have `byte_idx < bitmap.len()`.
+    /// The mask/ modulo operations guarantee `bit` stays within bounds.
     #[inline]
     pub fn contains(&self, addr: &str) -> bool {
-        if self.bitmap.is_empty() {
+        if self.bitmap.is_empty() || self.k_num <= 0 {
             return false;
         }
         let SipPair { h1, h2 } = siphash13_double(addr.as_bytes(), self.k0, self.k1);
         if self.pow2 {
+            // Fast path: bitmap size is power-of-2, use & instead of %
             for i in 0..self.k_num {
                 let bit = h1.wrapping_add((i as u64).wrapping_mul(h2)) & self.mask;
                 let byte_idx = (bit >> 3) as usize;
+                debug_assert!(byte_idx < self.bitmap.len(), "bloom index out of bounds");
                 let bmask = 1u8 << (bit & 7);
                 if self.bitmap[byte_idx] & bmask == 0 {
                     return false;
                 }
             }
         } else {
+            // General path: use modulo for non-pow2 bitmap
             for i in 0..self.k_num {
-                let bit = (h1.wrapping_add((i as u64).wrapping_mul(h2))) % self.bitmap_bits;
+                let bit = h1.wrapping_add((i as u64).wrapping_mul(h2)) % self.bitmap_bits;
                 let byte_idx = (bit >> 3) as usize;
+                debug_assert!(byte_idx < self.bitmap.len(), "bloom index out of bounds");
                 let bmask = 1u8 << (bit & 7);
                 if self.bitmap[byte_idx] & bmask == 0 {
                     return false;
@@ -319,5 +401,31 @@ mod tests {
 
         let result = load_idx(path.to_str().unwrap(), 100, 99999);
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_bloom_load_invalid_version() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("bad.bloom");
+        let mut f = File::create(&path).unwrap();
+        f.write_all(&[99]).unwrap(); // invalid version
+        f.flush().unwrap();
+
+        let result = BloomFilter::load(path.to_str().unwrap());
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            BloomError::InvalidVersion(99)
+        ));
+    }
+
+    #[test]
+    fn test_bloom_load_empty_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("empty.bloom");
+        File::create(&path).unwrap();
+
+        let result = BloomFilter::load(path.to_str().unwrap());
+        assert!(result.is_err());
     }
 }
