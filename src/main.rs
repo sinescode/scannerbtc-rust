@@ -255,6 +255,24 @@ impl BloomFilterBuilder {
 
 #[allow(clippy::print_literal)]
 fn cmd_build(input: &str, output: &str, expected: u64, fpp: f64) {
+    // Validate inputs
+    if input.is_empty() {
+        eprintln!("Error: input file path is empty");
+        std::process::exit(1);
+    }
+    if output.is_empty() {
+        eprintln!("Error: output file path is empty");
+        std::process::exit(1);
+    }
+    if !std::path::Path::new(input).exists() {
+        eprintln!("Error: input file does not exist: {}", input);
+        std::process::exit(1);
+    }
+    if fpp <= 0.0 || fpp >= 1.0 {
+        eprintln!("Error: --fpp must be between 0 and 1 (exclusive)");
+        std::process::exit(1);
+    }
+
     let ncpu = num_cpus::get();
 
     println!();
@@ -644,8 +662,8 @@ impl HitLogger {
         if let Some(ref mut f) = self.file {
             let now = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
-                .expect("system time before UNIX epoch")
-                .as_secs();
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
             // Proper UTC date formatting using simple calendar math
             let ts = format_timestamp(now);
             writeln!(
@@ -844,6 +862,24 @@ fn cmd_scan(
     let bloom_path = bloom_path.as_deref().unwrap_or("");
     let tsv_path = tsv_path.as_deref().unwrap_or("");
     let output_tsv = output_path.as_deref().unwrap_or("");
+
+    // Validate inputs
+    if !bloom_path.is_empty() && !std::path::Path::new(bloom_path).exists() {
+        eprintln!("Error: bloom file does not exist: {}", bloom_path);
+        std::process::exit(1);
+    }
+    if !tsv_path.is_empty() && !std::path::Path::new(tsv_path).exists() {
+        eprintln!("Error: TSV file does not exist: {}", tsv_path);
+        std::process::exit(1);
+    }
+    if nthreads == 0 {
+        eprintln!("Error: --threads must be > 0");
+        std::process::exit(1);
+    }
+    if depth == 0 {
+        eprintln!("Error: --depth must be > 0");
+        std::process::exit(1);
+    }
 
     let mode_val = match mode {
         "mnemonic" => MODE_MNEMONIC,
@@ -1064,6 +1100,20 @@ fn merge_outputs(final_path: &str, writers: &mut [ThreadWriter]) {
 
 #[allow(clippy::print_literal)]
 fn cmd_check(tsv_path: &str, bloom_path: &str, out_path: &str) {
+    // Validate inputs
+    if !std::path::Path::new(tsv_path).exists() {
+        eprintln!("Error: TSV file does not exist: {}", tsv_path);
+        std::process::exit(1);
+    }
+    if !std::path::Path::new(bloom_path).exists() {
+        eprintln!("Error: bloom file does not exist: {}", bloom_path);
+        std::process::exit(1);
+    }
+    if out_path.is_empty() {
+        eprintln!("Error: output file path is empty");
+        std::process::exit(1);
+    }
+
     let ncpu = num_cpus::get();
 
     println!();
@@ -1285,7 +1335,9 @@ fn cmd_check(tsv_path: &str, bloom_path: &str, out_path: &str) {
     );
 
     let _total_missing = g_missing.load(Ordering::Relaxed);
-    let mut writers_guard = writers.lock().expect("mutex poisoned");
+    let mut writers_guard = writers
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
     let mut writers_vec: Vec<ThreadWriter> = writers_guard.drain(..).flatten().collect();
     drop(writers_guard);
     merge_outputs(out_path, &mut writers_vec);
