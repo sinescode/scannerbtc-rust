@@ -1432,3 +1432,4 @@ fn main() {
         Commands::Check { tsv, bloom, output } => cmd_check(&tsv, &bloom, &output),
     }
 }
+
