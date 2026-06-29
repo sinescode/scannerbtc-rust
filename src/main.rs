@@ -1,6 +1,7 @@
 use clap::{Parser, Subcommand};
 use rand::Rng;
 use rand::RngCore;
+use std::collections::HashSet;
 use std::fs::File;
 use std::io::{BufReader, BufWriter, Read, Write};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -699,7 +700,7 @@ struct WorkerConfig {
     depth: usize,
     words: usize,
     bloom: Arc<BloomFilter>,
-    tsv: Option<Arc<TSVFile>>,
+    addr_set: Option<Arc<HashSet<String>>>,
     logger: Option<Arc<Mutex<HitLogger>>>,
     scanned: Arc<AtomicU64>,
     hits: Arc<AtomicU64>,
@@ -710,36 +711,10 @@ const MODE_RANDOM: i32 = 0;
 const MODE_MNEMONIC: i32 = 1;
 const MODE_MIX: i32 = 2;
 
-/// Confirm a Bloom positive with binary search on the TSV.
+/// Confirm a Bloom positive with a hash set lookup.
 /// Returns true only if the address is found in the TSV (exact match).
-fn confirm_with_tsv(tsv: &TSVFile, addr: &str) -> bool {
-    // Binary search on the sorted TSV offsets
-    let mut left = 0usize;
-    let mut right = tsv.total_lines;
-
-    while left < right {
-        let mid = left + (right - left) / 2;
-        let s = tsv.offsets[mid];
-        let e = if mid + 1 < tsv.total_lines {
-            tsv.offsets[mid + 1]
-        } else {
-            tsv.mmap.len()
-        };
-        let line = std::str::from_utf8(&tsv.mmap[s..e]).unwrap_or("");
-        let line = line.trim_end_matches('\n').trim_end_matches('\r');
-        let file_addr = if let Some(tab) = line.find('\t') {
-            &line[..tab]
-        } else {
-            line
-        };
-
-        match file_addr.cmp(addr) {
-            std::cmp::Ordering::Less => left = mid + 1,
-            std::cmp::Ordering::Greater => right = mid,
-            std::cmp::Ordering::Equal => return true,
-        }
-    }
-    false
+fn confirm_with_set(addr_set: &HashSet<String>, addr: &str) -> bool {
+    addr_set.contains(addr)
 }
 
 fn worker_func(cfg: WorkerConfig) {
@@ -769,10 +744,10 @@ fn worker_func(cfg: WorkerConfig) {
             ];
 
             for (addr_type, addr) in &addrs {
-                // In hybrid mode: bloom pre-filter → TSV binary search confirm
+                // In hybrid mode: bloom pre-filter → hash set confirm
                 // In bloom-only mode: just bloom check (probabilistic)
-                let hit = if let Some(ref tsv) = cfg.tsv {
-                    cfg.bloom.contains(addr) && confirm_with_tsv(tsv, addr)
+                let hit = if let Some(ref addr_set) = cfg.addr_set {
+                    cfg.bloom.contains(addr) && confirm_with_set(addr_set, addr)
                 } else {
                     cfg.bloom.contains(addr)
                 };
@@ -819,10 +794,10 @@ fn worker_func(cfg: WorkerConfig) {
             let count = records.len() as u64;
 
             for r in &records {
-                // In hybrid mode: bloom pre-filter → TSV binary search confirm
+                // In hybrid mode: bloom pre-filter → hash set confirm
                 // In bloom-only mode: just bloom check (probabilistic)
-                let hit = if let Some(ref tsv) = cfg.tsv {
-                    cfg.bloom.contains(&r.address) && confirm_with_tsv(tsv, &r.address)
+                let hit = if let Some(ref addr_set) = cfg.addr_set {
+                    cfg.bloom.contains(&r.address) && confirm_with_set(addr_set, &r.address)
                 } else {
                     cfg.bloom.contains(&r.address)
                 };
@@ -947,10 +922,21 @@ fn cmd_scan(
         }
     };
 
-    // Load TSV for hybrid mode confirmation
-    let tsv = if !tsv_path.is_empty() {
+    // Load TSV and build hash set for hybrid mode confirmation
+    let addr_set = if !tsv_path.is_empty() {
         match TSVFile::open(tsv_path) {
-            Some(t) => Some(Arc::new(t)),
+            Some(t) => {
+                // Build hash set from TSV for O(1) lookups
+                let mut set = HashSet::with_capacity(t.total_lines);
+                for i in 0..t.total_lines {
+                    if let Some((_, addr)) = t.get_line(i) {
+                        if is_valid_btc_address(addr) {
+                            set.insert(addr.to_string());
+                        }
+                    }
+                }
+                Some(Arc::new(set))
+            }
             None => {
                 eprintln!("Failed to load TSV file.");
                 std::process::exit(1);
@@ -987,7 +973,7 @@ fn cmd_scan(
             depth,
             words,
             bloom: bloom.clone(),
-            tsv: tsv.clone(),
+            addr_set: addr_set.clone(),
             logger: logger.clone(),
             scanned: scanned.clone(),
             hits: hits.clone(),
