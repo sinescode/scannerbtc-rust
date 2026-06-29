@@ -8,7 +8,7 @@ Single Rust binary `btc-scanner` with 3 subcommands: `build`, `scan`, `check`.
 
 ```bash
 cargo build --release         # single binary: target/release/btc-scanner
-cargo test                    # 112 tests, all pass
+cargo test                    # 120 tests, all pass
 cargo clippy --all-targets    # zero warnings
 cargo fmt                     # format
 cargo bench                   # run benchmarks
@@ -41,6 +41,7 @@ sha2 0.11, ripemd 0.2, hmac 0.13, secp256k1 0.31, rand 0.9, pbkdf2 0.13, clap 4,
 - **Static secp256k1 context**: `LazyLock<Secp256k1<All>>` reused across all calls
 - **NFKD normalization**: BIP-39 mnemonic and passphrase normalized before PBKDF2
 - **Zeroize on drop**: `XKey` zeros key material when dropped
+- **Randomized Bloom seeds**: k0/k1 generated randomly for security
 - **Debug assertions**: Bloom filter indexing bounds checked in debug builds
 
 ## Compatibility

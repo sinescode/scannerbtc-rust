@@ -42,16 +42,16 @@ scannerbtc-rust/
 | File | Lines | Purpose |
 |------|-------|---------|
 | [Cargo.toml](https://github.com/sinescode/scannerbtc-rust/blob/main/Cargo.toml) | 45 | Manifest: deps, profiles, binary definition |
-| [README.md](https://github.com/sinescode/scannerbtc-rust/blob/main/README.md) | 100 | User docs: install, usage, examples |
+| [README.md](https://github.com/sinescode/scannerbtc-rust/blob/main/README.md) | 115 | User docs: install, usage, benchmarks |
 | [AGENTS.md](https://github.com/sinescode/scannerbtc-rust/blob/main/AGENTS.md) | 55 | Agent reference: build, structure, conventions |
 | [SECURITY.md](https://github.com/sinescode/scannerbtc-rust/blob/main/SECURITY.md) | 68 | Threat model, security policy |
 | [bip39_words.txt](https://github.com/sinescode/scannerbtc-rust/blob/main/bip39_words.txt) | 2048 | BIP-39 English wordlist |
-| [src/main.rs](https://github.com/sinescode/scannerbtc-rust/blob/main/src/main.rs) | 1247 | CLI + `build` / `scan` / `check` subcommands |
+| [src/main.rs](https://github.com/sinescode/scannerbtc-rust/blob/main/src/main.rs) | 1315 | CLI + `build` / `scan` / `check` subcommands |
 | [src/lib.rs](https://github.com/sinescode/scannerbtc-rust/blob/main/src/lib.rs) | 9 | Module declarations |
 | [src/config.rs](https://github.com/sinescode/scannerbtc-rust/blob/main/src/config.rs) | 188 | Configuration management with validation |
 | [src/siphash.rs](https://github.com/sinescode/scannerbtc-rust/blob/main/src/siphash.rs) | 148 | SipHash-1-3 double-output (Bloom filter hash) |
 | [src/bloom.rs](https://github.com/sinescode/scannerbtc-rust/blob/main/src/bloom.rs) | 431 | Bloom filter v3, TSV index cache, line offsets |
-| [src/crypto.rs](https://github.com/sinescode/scannerbtc-rust/blob/main/src/crypto.rs) | 196 | SHA-256, RIPEMD-160, HMAC, PBKDF2, secp256k1 |
+| [src/crypto.rs](https://github.com/sinescode/scannerbtc-rust/blob/main/src/crypto.rs) | 362 | SHA-256, RIPEMD-160, HMAC, PBKDF2, secp256k1 |
 | [src/encoding.rs](https://github.com/sinescode/scannerbtc-rust/blob/main/src/encoding.rs) | 403 | Base58Check encode/decode, Bech32/Bech32m |
 | [src/bitcoin.rs](https://github.com/sinescode/scannerbtc-rust/blob/main/src/bitcoin.rs) | 301 | P2PKH, P2SH-P2WPKH, P2WPKH, P2WSH, P2TR |
 | [src/bip32.rs](https://github.com/sinescode/scannerbtc-rust/blob/main/src/bip32.rs) | 328 | BIP-32 HD key derivation |

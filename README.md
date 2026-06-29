@@ -61,10 +61,26 @@ Filter mode auto-detected: `--bloom --tsv` = HYBRID, `--bloom` only = BLOOM_ONLY
 btc-scanner check addresses.tsv addresses.bloom missing.tsv
 ```
 
+## Performance
+
+| Operation | Time | Throughput |
+|-----------|------|------------|
+| SHA-256 (1KB) | 597 ns | ~1.7 GB/s |
+| RIPEMD-160 (32B) | 198 ns | ~162 MB/s |
+| HASH160 (32B) | 267 ns | ~120 MB/s |
+| HMAC-SHA512 | 969 ns | ~1.0M ops/s |
+| PBKDF2 (2048 rounds) | 1.02 ms | ~981 ops/s |
+| SipHash-1-3 | 549 ps | ~1.8B ops/s |
+| BIP-32 hardened child | 1.01 µs | ~990K ops/s |
+| Mnemonic → seed | 980 µs | ~1.0K ops/s |
+| fill_key_data (all 5 addrs) | 76.9 µs | ~13K ops/s |
+| Base58Check encode | 1.56 µs | ~641K ops/s |
+| Bech32 encode (v0) | 342 ns | ~2.9M ops/s |
+
 ## Development
 
 ```bash
-cargo test                    # 112 tests
+cargo test                    # 120 tests
 cargo clippy --all-targets    # zero warnings
 cargo fmt                     # format
 cargo bench                   # run benchmarks
