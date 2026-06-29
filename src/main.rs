@@ -676,6 +676,7 @@ struct WorkerConfig {
     depth: usize,
     words: usize,
     bloom: Arc<BloomFilter>,
+    tsv: Option<Arc<TSVFile>>,
     logger: Option<Arc<Mutex<HitLogger>>>,
     scanned: Arc<AtomicU64>,
     hits: Arc<AtomicU64>,
@@ -685,6 +686,38 @@ struct WorkerConfig {
 const MODE_RANDOM: i32 = 0;
 const MODE_MNEMONIC: i32 = 1;
 const MODE_MIX: i32 = 2;
+
+/// Confirm a Bloom positive with binary search on the TSV.
+/// Returns true only if the address is found in the TSV (exact match).
+fn confirm_with_tsv(tsv: &TSVFile, addr: &str) -> bool {
+    // Binary search on the sorted TSV offsets
+    let mut left = 0usize;
+    let mut right = tsv.total_lines;
+
+    while left < right {
+        let mid = left + (right - left) / 2;
+        let s = tsv.offsets[mid];
+        let e = if mid + 1 < tsv.total_lines {
+            tsv.offsets[mid + 1]
+        } else {
+            tsv.mmap.len()
+        };
+        let line = std::str::from_utf8(&tsv.mmap[s..e]).unwrap_or("");
+        let line = line.trim_end_matches('\n').trim_end_matches('\r');
+        let file_addr = if let Some(tab) = line.find('\t') {
+            &line[..tab]
+        } else {
+            line
+        };
+
+        match file_addr.cmp(addr) {
+            std::cmp::Ordering::Less => left = mid + 1,
+            std::cmp::Ordering::Greater => right = mid,
+            std::cmp::Ordering::Equal => return true,
+        }
+    }
+    false
+}
 
 fn worker_func(cfg: WorkerConfig) {
     let mut rng = rand::rng();
@@ -713,7 +746,13 @@ fn worker_func(cfg: WorkerConfig) {
             ];
 
             for (addr_type, addr) in &addrs {
-                let hit = cfg.bloom.contains(addr);
+                // In hybrid mode: bloom pre-filter → TSV binary search confirm
+                // In bloom-only mode: just bloom check (probabilistic)
+                let hit = if let Some(ref tsv) = cfg.tsv {
+                    cfg.bloom.contains(addr) && confirm_with_tsv(tsv, addr)
+                } else {
+                    cfg.bloom.contains(addr)
+                };
                 if hit {
                     cfg.hits.fetch_add(1, Ordering::Relaxed);
                     if let Some(ref logger) = cfg.logger {
@@ -755,7 +794,13 @@ fn worker_func(cfg: WorkerConfig) {
             let count = records.len() as u64;
 
             for r in &records {
-                let hit = cfg.bloom.contains(&r.address);
+                // In hybrid mode: bloom pre-filter → TSV binary search confirm
+                // In bloom-only mode: just bloom check (probabilistic)
+                let hit = if let Some(ref tsv) = cfg.tsv {
+                    cfg.bloom.contains(&r.address) && confirm_with_tsv(tsv, &r.address)
+                } else {
+                    cfg.bloom.contains(&r.address)
+                };
                 if hit {
                     cfg.hits.fetch_add(1, Ordering::Relaxed);
                     if let Some(ref logger) = cfg.logger {
@@ -859,6 +904,19 @@ fn cmd_scan(
         }
     };
 
+    // Load TSV for hybrid mode confirmation
+    let tsv = if !tsv_path.is_empty() {
+        match TSVFile::open(tsv_path) {
+            Some(t) => Some(Arc::new(t)),
+            None => {
+                eprintln!("Failed to load TSV file.");
+                std::process::exit(1);
+            }
+        }
+    } else {
+        None
+    };
+
     println!();
 
     let logger = if !output_tsv.is_empty() {
@@ -878,6 +936,7 @@ fn cmd_scan(
             depth,
             words,
             bloom: bloom.clone(),
+            tsv: tsv.clone(),
             logger: logger.clone(),
             scanned: scanned.clone(),
             hits: hits.clone(),
