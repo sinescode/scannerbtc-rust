@@ -776,16 +776,22 @@ fn worker_func(cfg: WorkerConfig) {
                 } else {
                     cfg.bloom.contains(addr)
                 };
-                    if hit {
-                        cfg.hits.fetch_add(1, Ordering::Relaxed);
-                        if let Some(ref logger) = cfg.logger {
-                            if let Ok(mut log) = logger.lock() {
-                                log.log(
-                                    addr, addr_type, &kd.wif, &kd.priv_hex,
-                                    &kd.compressed_pub_hex, &kd.xonly_pub_hex, "", "random",
-                                );
-                            }
+                if hit {
+                    cfg.hits.fetch_add(1, Ordering::Relaxed);
+                    if let Some(ref logger) = cfg.logger {
+                        if let Ok(mut log) = logger.lock() {
+                            log.log(
+                                addr,
+                                addr_type,
+                                &kd.wif,
+                                &kd.priv_hex,
+                                &kd.compressed_pub_hex,
+                                &kd.xonly_pub_hex,
+                                "",
+                                "random",
+                            );
                         }
+                    }
                     println!(
                         "\n{}{}🎯 HIT! {} {}{}",
                         ANSI_GREEN, ANSI_BOLD, addr_type, addr, ANSI_RESET
@@ -1335,9 +1341,7 @@ fn cmd_check(tsv_path: &str, bloom_path: &str, out_path: &str) {
     );
 
     let _total_missing = g_missing.load(Ordering::Relaxed);
-    let mut writers_guard = writers
-        .lock()
-        .unwrap_or_else(|poison| poison.into_inner());
+    let mut writers_guard = writers.lock().unwrap_or_else(|poison| poison.into_inner());
     let mut writers_vec: Vec<ThreadWriter> = writers_guard.drain(..).flatten().collect();
     drop(writers_guard);
     merge_outputs(out_path, &mut writers_vec);
