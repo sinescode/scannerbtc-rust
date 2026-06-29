@@ -275,12 +275,17 @@ fn cmd_build(input: &str, output: &str, expected: u64, fpp: f64) {
     println!();
 
     println!("{}  ⟳{}  Mapping {}...", ANSI_YELLOW, ANSI_RESET, input);
-    // SAFETY: Mmap::map maps a file into virtual memory. The file was opened
-    // successfully (checked by expect), and Mmap::map checks the file is valid.
-    // No data is mutated through this mapping — it's read-only.
-    let mmap = Arc::new(unsafe {
-        let file = File::open(input).expect("Cannot open TSV");
-        memmap2::Mmap::map(&file).expect("Cannot mmap TSV")
+    let mmap = Arc::new({
+        let file = File::open(input).unwrap_or_else(|e| {
+            eprintln!("Cannot open TSV: {}", e);
+            std::process::exit(1);
+        });
+        unsafe {
+            memmap2::Mmap::map(&file).unwrap_or_else(|e| {
+                eprintln!("Cannot mmap TSV: {}", e);
+                std::process::exit(1);
+            })
+        }
     });
     println!(
         "{}  ✔{}  {}",
@@ -753,20 +758,16 @@ fn worker_func(cfg: WorkerConfig) {
                 } else {
                     cfg.bloom.contains(addr)
                 };
-                if hit {
-                    cfg.hits.fetch_add(1, Ordering::Relaxed);
-                    if let Some(ref logger) = cfg.logger {
-                        logger.lock().unwrap().log(
-                            addr,
-                            addr_type,
-                            &kd.wif,
-                            &kd.priv_hex,
-                            &kd.compressed_pub_hex,
-                            &kd.xonly_pub_hex,
-                            "",
-                            "random",
-                        );
-                    }
+                    if hit {
+                        cfg.hits.fetch_add(1, Ordering::Relaxed);
+                        if let Some(ref logger) = cfg.logger {
+                            if let Ok(mut log) = logger.lock() {
+                                log.log(
+                                    addr, addr_type, &kd.wif, &kd.priv_hex,
+                                    &kd.compressed_pub_hex, &kd.xonly_pub_hex, "", "random",
+                                );
+                            }
+                        }
                     println!(
                         "\n{}{}🎯 HIT! {} {}{}",
                         ANSI_GREEN, ANSI_BOLD, addr_type, addr, ANSI_RESET
@@ -1035,7 +1036,10 @@ impl ThreadWriter {
 }
 
 fn merge_outputs(final_path: &str, writers: &mut [ThreadWriter]) {
-    let f = File::create(final_path).expect("Cannot create output");
+    let f = File::create(final_path).unwrap_or_else(|e| {
+        eprintln!("Cannot create output: {}", e);
+        std::process::exit(1);
+    });
     let mut out = BufWriter::new(f);
     writeln!(out, "address\trest").ok();
 
