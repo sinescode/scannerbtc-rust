@@ -45,13 +45,27 @@ An attacker may:
 1. **No secret persistence**: Private keys, mnemonics, and seeds are not written to disk
    unless explicitly requested by the user (via `--output`).
 
-2. **Memory zeroization**: Sensitive key material in `XKey` is zeroed on drop.
+2. **Memory zeroization**: Sensitive key material in `XKey` is zeroed on drop via the
+   `zeroize` crate.
 
 3. **Constant-time operations**: Cryptographic operations use library implementations
    that are designed to be constant-time where applicable.
 
 4. **No unsafe code in crypto**: All cryptographic operations use safe Rust wrappers
    around well-tested libraries.
+
+5. **TSV memory guard**: The hybrid‑mode `HashSet<String>` is capped at 20M entries
+   to prevent OOM. TSVs larger than this threshold fall back to bloom‑only mode,
+   trading exactness for safety.
+
+6. **Panic safety**: Worker‑thread panics are caught and logged; the main thread
+   does not hang on a panicked worker.
+
+7. **Bloom seed randomization**: k0/k1 are sourced from `OsRng` via the `rand` crate.
+   No hardcoded or predictable seeds are used.
+
+8. **TOCTOU‑free temp files**: Per‑thread output files use `O_EXCL` combined with
+   the process PID in the filename to prevent symlink‑race attacks.
 
 ### Out of Scope
 

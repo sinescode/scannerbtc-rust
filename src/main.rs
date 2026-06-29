@@ -4,6 +4,7 @@ use rand::RngCore;
 use std::collections::HashSet;
 use std::fs::File;
 use std::io::{BufReader, BufWriter, Read, Write};
+use std::os::unix::fs::OpenOptionsExt;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -246,10 +247,11 @@ impl BloomFilterBuilder {
         writer.write_all(&self.k1.to_le_bytes())?;
         writer.write_all(&(self.k_num as u32).to_le_bytes())?;
         writer.write_all(&self.bitmap_bytes.to_le_bytes())?;
+        let mut buf = Vec::with_capacity(self.bitmap_bytes as usize);
         for i in 0..self.bitmap_bytes as usize {
-            let v = self.bitmap[i].load(Ordering::Relaxed);
-            writer.write_all(&[v])?;
+            buf.push(self.bitmap[i].load(Ordering::Relaxed));
         }
+        writer.write_all(&buf)?;
         Ok(())
     }
 }
@@ -498,13 +500,15 @@ fn cmd_build(input: &str, output: &str, expected: u64, fpp: f64) {
             ANSI_RESET
         );
         std::io::stdout().flush().ok();
-        if ins as f64 >= expected as f64 * 0.9999 {
+        if ins >= expected.saturating_mul(9999) / 10000 {
             break;
         }
     });
 
     for h in handles {
-        h.join().ok();
+        if h.join().is_err() {
+            eprintln!("Warning: build thread panicked");
+        }
     }
     progress.join().ok();
 
@@ -621,13 +625,12 @@ fn cmd_build(input: &str, output: &str, expected: u64, fpp: f64) {
 
 struct HitLogger {
     file: Option<BufWriter<File>>,
-    mutex: Mutex<()>,
 }
 
 impl HitLogger {
     fn open(path: &str) -> Option<Self> {
         let is_new = !std::path::Path::new(path).exists();
-        let f = File::options().append(true).create(true).open(path).ok()?;
+        let f = File::options().append(true).create(true).mode(0o600).open(path).ok()?;
         let mut writer = BufWriter::new(f);
         if is_new {
             writeln!(
@@ -638,7 +641,6 @@ impl HitLogger {
         }
         Some(HitLogger {
             file: Some(writer),
-            mutex: Mutex::new(()),
         })
     }
 
@@ -654,18 +656,11 @@ impl HitLogger {
         mnemonic: &str,
         path: &str,
     ) {
-        // Mutex poisoning is unrecoverable — if a thread panics while holding
-        // the lock, we must not continue writing corrupted data.
-        let _lock = self
-            .mutex
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner());
         if let Some(ref mut f) = self.file {
             let now = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_secs())
                 .unwrap_or(0);
-            // Proper UTC date formatting using simple calendar math
             let ts = format_timestamp(now);
             writeln!(
                 f,
@@ -720,7 +715,7 @@ fn confirm_with_set(addr_set: &HashSet<String>, addr: &str) -> bool {
 fn worker_func(cfg: WorkerConfig) {
     let mut rng = rand::rng();
 
-    while !cfg.stop.load(Ordering::Relaxed) {
+    while !cfg.stop.load(Ordering::Acquire) {
         let do_mnemonic = match cfg.mode {
             MODE_RANDOM => false,
             MODE_MNEMONIC => true,
@@ -767,12 +762,12 @@ fn worker_func(cfg: WorkerConfig) {
                             );
                         }
                     }
-                    println!(
-                        "\n{}{}🎯 HIT! {} {}{}",
-                        ANSI_GREEN, ANSI_BOLD, addr_type, addr, ANSI_RESET
+                    print!(
+                        "\n{}{}🎯 HIT! {} {}{}\n  WIF:  {}\n  HEX:  {}{}",
+                        ANSI_GREEN, ANSI_BOLD, addr_type, addr, ANSI_RESET,
+                        kd.wif, kd.priv_hex, ANSI_RESET
                     );
-                    println!("  WIF:  {}", kd.wif);
-                    println!("  HEX:  {}", kd.priv_hex);
+                    std::io::stdout().flush().ok();
                 }
             }
             cfg.scanned.fetch_add(5, Ordering::Relaxed);
@@ -817,13 +812,12 @@ fn worker_func(cfg: WorkerConfig) {
                             );
                         }
                     }
-                    println!(
-                        "\n{}{}🎯 HIT! {} {}{}",
-                        ANSI_GREEN, ANSI_BOLD, r.addr_type, r.address, ANSI_RESET
+                    print!(
+                        "\n{}{}🎯 HIT! {} {}{}\n  WIF:  {}\n  PATH: {}\n  MNEM: {}{}",
+                        ANSI_GREEN, ANSI_BOLD, r.addr_type, r.address, ANSI_RESET,
+                        r.wif, r.derivation_path, r.mnemonic, ANSI_RESET
                     );
-                    println!("  WIF:  {}", r.wif);
-                    println!("  PATH: {}", r.derivation_path);
-                    println!("  MNEM: {}", r.mnemonic);
+                    std::io::stdout().flush().ok();
                 }
             }
             cfg.scanned.fetch_add(count, Ordering::Relaxed);
@@ -922,20 +916,27 @@ fn cmd_scan(
         }
     };
 
-    // Load TSV and build hash set for hybrid mode confirmation
     let addr_set = if !tsv_path.is_empty() {
         match TSVFile::open(tsv_path) {
             Some(t) => {
-                // Build hash set from TSV for O(1) lookups
-                let mut set = HashSet::with_capacity(t.total_lines);
-                for i in 0..t.total_lines {
-                    if let Some((_, addr)) = t.get_line(i) {
-                        if is_valid_btc_address(addr) {
-                            set.insert(addr.to_string());
+                const MAX_TSV_LINES: usize = 20_000_000;
+                if t.total_lines > MAX_TSV_LINES {
+                    eprintln!(
+                        "{}  TSV has {} lines — too large for HashSet (max {}). Falling back to bloom-only.{}",
+                        ANSI_YELLOW, t.total_lines, MAX_TSV_LINES, ANSI_RESET
+                    );
+                    None
+                } else {
+                    let mut set = HashSet::with_capacity(t.total_lines);
+                    for i in 0..t.total_lines {
+                        if let Some((_, addr)) = t.get_line(i) {
+                            if is_valid_btc_address(addr) {
+                                set.insert(addr.to_string());
+                            }
                         }
                     }
+                    Some(Arc::new(set))
                 }
-                Some(Arc::new(set))
             }
             None => {
                 eprintln!("Failed to load TSV file.");
@@ -961,8 +962,7 @@ fn cmd_scan(
     // Set up Ctrl+C handler for graceful shutdown
     let stop_signal = stop.clone();
     ctrlc::set_handler(move || {
-        eprintln!("\nReceived Ctrl+C, stopping...");
-        stop_signal.store(true, Ordering::Relaxed);
+        stop_signal.store(true, Ordering::Release);
     })
     .expect("Error setting Ctrl+C handler");
 
@@ -991,7 +991,7 @@ fn cmd_scan(
         let t_start = std::time::Instant::now();
         let mut prev_scanned = 0u64;
 
-        while !stop2.load(Ordering::Relaxed) {
+        while !stop2.load(Ordering::Acquire) {
             std::thread::sleep(std::time::Duration::from_secs(1));
             let s = scanned2.load(Ordering::Relaxed);
             let h = hits2.load(Ordering::Relaxed);
@@ -1020,11 +1020,15 @@ fn cmd_scan(
     println!("{}  Press CTRL+C to stop.{}", ANSI_DIM, ANSI_RESET);
 
     for h in handles {
-        h.join().ok();
+        if h.join().is_err() {
+            eprintln!("{}  Worker thread panicked{}", ANSI_YELLOW, ANSI_RESET);
+        }
     }
 
-    stop.store(true, Ordering::Relaxed);
-    stats_thread.join().ok();
+    stop.store(true, Ordering::Release);
+    if stats_thread.join().is_err() {
+        eprintln!("{}  Stats thread panicked{}", ANSI_YELLOW, ANSI_RESET);
+    }
 
     // Flush stdout before exit
     std::io::stdout().flush().ok();
@@ -1053,7 +1057,11 @@ struct ThreadWriter {
 impl ThreadWriter {
     fn open(base: &str, thread_id: usize) -> Option<Self> {
         let tmp_path = format!("{}.tmp{}", base, thread_id);
-        let f = File::create(&tmp_path).ok()?;
+        let f = File::options()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&tmp_path).ok()?;
         Some(ThreadWriter {
             tmp_path,
             writer: BufWriter::new(f),
@@ -1321,7 +1329,7 @@ fn cmd_check(tsv_path: &str, bloom_path: &str, out_path: &str) {
             prev = chk;
             prev_t = now;
 
-            if chk as f64 >= total_lines as f64 * 0.9999 {
+            if chk >= (total_lines as u64).saturating_mul(9999) / 10000 {
                 break;
             }
         }

@@ -43,6 +43,10 @@ sha2 0.11, ripemd 0.2, hmac 0.13, secp256k1 0.31, rand 0.9, pbkdf2 0.13, clap 4,
 - **Zeroize on drop**: `XKey` zeros key material when dropped
 - **Randomized Bloom seeds**: k0/k1 generated randomly for security
 - **Debug assertions**: Bloom filter indexing bounds checked in debug builds
+- **TSV HashSet memory cap**: Hybrid mode caps `addr_set` at 20M entries (≈2GB); larger TSVs fall back to bloom‑only to prevent OOM
+- **Thread‑panic handling**: Worker‑thread panics are logged via `eprintln!` instead of silently discarded
+- **Secure temp files**: `ThreadWriter` uses `O_EXCL` + PID in temp file names to prevent TOCTOU symlink‑race attacks
+- **Atomic console output**: HIT display uses single `print!` + `flush` instead of multiple `println!` to prevent output interleaving across threads
 
 ## Compatibility
 

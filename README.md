@@ -107,9 +107,22 @@ tests/
 └── differential.rs   # Official BIP-32/BIP-39 test vectors
 ```
 
-## Security
+## Hardening (June 2026)
 
-See [SECURITY.md](SECURITY.md) for threat model and security policy.
+| Area | Issue | Fix |
+|------|-------|-----|
+| Thread safety | `println!` in signal handler is not async‑signal‑safe | Replaced with `AtomicBool` + `Ordering::Release/Acquire` |
+| Output interleaving | Multiple `println!` from concurrent threads | Single `print!` + `flush` per HIT |
+| Bloom seeds | N/A (already randomized via `OsRng`) | Unchanged — already secure |
+| Temp‑file TOCTOU | Predictable names in `ThreadWriter` | `O_EXCL` + PID in filename, mode `0o600` |
+| TSV OOM | `HashSet<String>` unbounded growth | Capped at 20M entries; falls back to bloom‑only |
+| Thread panic | `h.join().ok()` silently discards panics | Logged via `eprintln!` |
+| Signal handler | `eprintln!` inside handler | Removed — handler only sets `AtomicBool` |
+| Stop‑flag ordering | All `Relaxed` on stop flag | Changed to `Release`/`Acquire` for correct visibility |
+| Bloom save I/O | Byte‑at‑a‑time writes | Batched `Vec` writes |
+| Hit‑logger lock | Redundant `Mutex<Mutex<>>` | Removed inner `Mutex` |
+
+See [SECURITY.md](SECURITY.md) for the full threat model and security policy.
 
 ## License
 
