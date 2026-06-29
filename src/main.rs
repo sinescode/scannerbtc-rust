@@ -972,6 +972,14 @@ fn cmd_scan(
     let hits = Arc::new(AtomicU64::new(0));
     let stop = Arc::new(AtomicBool::new(false));
 
+    // Set up Ctrl+C handler for graceful shutdown
+    let stop_signal = stop.clone();
+    ctrlc::set_handler(move || {
+        eprintln!("\nReceived Ctrl+C, stopping...");
+        stop_signal.store(true, Ordering::Relaxed);
+    })
+    .expect("Error setting Ctrl+C handler");
+
     let mut handles = Vec::new();
     for _ in 0..nthreads {
         let cfg = WorkerConfig {
@@ -1031,6 +1039,9 @@ fn cmd_scan(
 
     stop.store(true, Ordering::Relaxed);
     stats_thread.join().ok();
+
+    // Flush stdout before exit
+    std::io::stdout().flush().ok();
 
     let total = scanned.load(Ordering::Relaxed);
     let total_hits = hits.load(Ordering::Relaxed);
@@ -1432,4 +1443,3 @@ fn main() {
         Commands::Check { tsv, bloom, output } => cmd_check(&tsv, &bloom, &output),
     }
 }
-
